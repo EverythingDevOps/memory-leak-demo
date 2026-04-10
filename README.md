@@ -131,7 +131,7 @@ memory-leak-demo/
 ## Jira Ticket
 
 This project demonstrates the bug described in:
-**https://everythingdevops-37268243.atlassian.net/browse/KAN-2**
+**https://everythingdevops-demo.atlassian.net/browse/KAN-2**
 
 ## Next Steps
 
