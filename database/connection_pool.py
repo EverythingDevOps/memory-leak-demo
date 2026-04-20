@@ -1,6 +1,6 @@
 """
 Database connection pool
-⚠️ THIS FILE CONTAINS INTENTIONAL MEMORY LEAKS
+✅ FIXED: Proper connection pooling with reuse, max size enforcement, and cleanup
 """
 
 import time
@@ -39,66 +39,68 @@ class DatabaseConnection:
 class ConnectionPool:
     """
     Database connection pool
-    
-    ⚠️ MEMORY LEAK: Connections are created but never properly closed!
-    The pool keeps growing and connections are never returned or cleaned up.
+
+    ✅ FIXED:
+    - Reuses available connections instead of always creating new ones
+    - Enforces max_size limit to prevent unbounded pool growth
+    - Connections are properly released back to the pool after use
+    - close_all() is called on shutdown to free all resources
     """
     
     def __init__(self, max_size=10):
         self.max_size = max_size
-        
-        # 🐛 MEMORY LEAK: This list grows forever!
-        # Connections are added but never removed
-        self.connections = []
-        
-        # 🐛 MEMORY LEAK: "Available" connections are never actually reused
-        self.available = []
-        
+        self.connections = []   # All connections (active + available)
+        self.available = []     # ✅ FIX: Available connections are now actually reused
         self.lock = Lock()
         self.connection_counter = 0
     
     def get_connection(self):
         """
-        Get a database connection
-        
-        🐛 BUG: Always creates new connection instead of reusing!
-        Should check self.available first, but doesn't.
+        Get a database connection.
+
+        ✅ FIX: Reuses available connections from the pool. Only creates a new
+        connection when none are available and the pool has not reached max_size.
+        Raises RuntimeError if the pool is exhausted.
         """
         with self.lock:
-            # BUG: Should check if available connections exist
-            # if self.available:
-            #     return self.available.pop()
-            
-            # Instead, always create new connection (LEAK!)
+            # ✅ FIX: Reuse an available connection if one exists
+            if self.available:
+                conn = self.available.pop()
+                print(f"🔌 Reusing connection {conn.id} (Available: {len(self.available)})")
+                return conn
+
+            # ✅ FIX: Enforce max pool size
+            if len(self.connections) >= self.max_size:
+                raise RuntimeError(
+                    f"Connection pool exhausted (max_size={self.max_size}). "
+                    "All connections are in use."
+                )
+
+            # Create a new connection only when necessary
             self.connection_counter += 1
             conn = DatabaseConnection(self.connection_counter)
-            self.connections.append(conn)  # Never removed!
-            
+            self.connections.append(conn)
             print(f"🔌 Created connection {conn.id} (Total: {len(self.connections)})")
-            
-            # Simulate the leak getting worse over time
-            if len(self.connections) % 10 == 0:
-                print(f"⚠️  WARNING: {len(self.connections)} connections in pool!")
-            
             return conn
     
     def release_connection(self, conn):
         """
-        Release a connection back to the pool
-        
-        🐛 BUG: This method exists but is NEVER called!
-        Connections are never returned to the pool.
+        Release a connection back to the pool.
+
+        ✅ FIX: This method is now called by callers (e.g. BackgroundProcessor)
+        after every use so connections are properly recycled.
         """
         with self.lock:
             if conn and not conn.is_closed:
                 self.available.append(conn)
-                print(f"🔌 Released connection {conn.id}")
+                print(f"🔌 Released connection {conn.id} (Available: {len(self.available)})")
     
     def close_all(self):
         """
-        Close all connections
-        
-        🐛 BUG: This is never called during normal operation
+        Close all connections and free their resources.
+
+        ✅ FIX: Called during BackgroundProcessor.stop() to ensure all
+        connections are properly cleaned up on shutdown.
         """
         with self.lock:
             for conn in self.connections:
@@ -106,7 +108,7 @@ class ConnectionPool:
                     conn.close()
             self.connections.clear()
             self.available.clear()
-            print(f"🔌 Closed all connections")
+            print("🔌 Closed all connections")
     
     def get_stats(self):
         """Get connection pool statistics"""

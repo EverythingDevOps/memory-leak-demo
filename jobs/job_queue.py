@@ -1,17 +1,29 @@
 """
 Job queue management
+✅ FIXED: Completed/failed jobs are evicted after exceeding a retention limit
+          to prevent the jobs dict growing without bound.
 """
 
 import uuid
 from datetime import datetime
 from threading import Lock
 
+# Maximum number of completed/failed jobs to retain in memory
+_COMPLETED_JOBS_MAX = 500
+
 class JobQueue:
-    """Simple in-memory job queue"""
-    
+    """
+    Simple in-memory job queue.
+
+    ✅ FIX: When the number of finished (completed/failed) jobs exceeds
+    _COMPLETED_JOBS_MAX, the oldest finished jobs are evicted from the
+    in-memory store so the dict does not grow without bound.
+    """
+
     def __init__(self):
         self.jobs = {}
         self.pending_jobs = []
+        self._finished_job_ids = []   # ordered list of finished job IDs for eviction
         self.lock = Lock()
     
     def submit_job(self, job_type, job_data, priority='normal'):
@@ -52,17 +64,24 @@ class JobQueue:
             return job
     
     def update_job_status(self, job_id, status, result=None, error=None):
-        """Update job status"""
+        """Update job status, evicting old finished jobs when the retention limit is exceeded."""
         with self.lock:
             if job_id in self.jobs:
                 self.jobs[job_id]['status'] = status
                 self.jobs[job_id]['updated_at'] = datetime.now().isoformat()
-                
+
                 if result is not None:
                     self.jobs[job_id]['result'] = result
-                
+
                 if error is not None:
                     self.jobs[job_id]['error'] = error
+
+                # ✅ FIX: Track finished jobs and evict oldest when over the limit
+                if status in ('completed', 'failed'):
+                    self._finished_job_ids.append(job_id)
+                    while len(self._finished_job_ids) > _COMPLETED_JOBS_MAX:
+                        oldest_id = self._finished_job_ids.pop(0)
+                        self.jobs.pop(oldest_id, None)
     
     def get_job_status(self, job_id):
         """Get status of a specific job"""
